@@ -31,13 +31,16 @@ class SearchQueries(BaseModel):
 def plan_node(state: AgentState) -> dict:
     """Analyze the topic and generate search queries."""
     print(f"--- PLANNING for topic: {state['topic']} (Level: {state['depth_level']}) ---")
-    history = state.get("messages", [])
+    
+    summary = state.get("summary", "")
+   
+    summary_context = f"\n【前期进展与用户反馈摘要】\n{summary}\n请务必基于上述摘要（尤其是用户的修改诉求），更新并调整本次的搜索关键词！\n" if summary else ""
     # 2. 初始化 JSON 解析器
     parser = JsonOutputParser(pydantic_object=SearchQueries)
     
     # 3. 修复 Prompt：使用 from_messages，并注入 parser 的格式说明
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """你是一个顶级的 AI 技术研究规划师与搜索引擎优化专家（SEO）。
+        ("system", f"""你是一个顶级的 AI 技术研究规划师与搜索引擎优化专家（SEO）。
 你的任务是根据深度级别,搜索历史，将用户的学习主题，精准翻译为 ArXiv、GitHub 和 YouTube 这三个平台的底层搜索查询词。
 
 【平台搜索法则】
@@ -46,6 +49,7 @@ def plan_node(state: AgentState) -> dict:
 3. 教学视频 (YouTube): 侧重于直观的解释、实战教程或架构解析。
 
 {format_instructions}
+{summary_context}
 【Few-Shot 案例】
 主题：LangChain Agent入门
 深度级别：Beginner
@@ -69,7 +73,8 @@ def plan_node(state: AgentState) -> dict:
             "topic": state["topic"],
             "depth_level": state["depth_level"],
             "format_instructions": parser.get_format_instructions(),
-            "chat_history": history
+            "summary_context": summary_context,               # ⭐ 核心修改 2：把动态字符串传进去
+            "chat_history": state.get("messages", [])
 
         })
     except Exception as e:
@@ -176,13 +181,17 @@ def synthesis_node(state: AgentState) -> dict:
     print("--- SYNTHESIZING REPORT ---")
     
     from langchain_core.prompts import ChatPromptTemplate
-
+    summary = state.get("summary", "")
+    
     synthesis_prompt = ChatPromptTemplate.from_template("""
 你是一个资深的技术布道师和全栈工程师，负责创建一个丰富、现代化的单页面网页（SPA），用于指定主题的详细学习和研究。
 
 【任务信息】
 主题：{topic}
 目标级别：{depth_level}
+历史对话：{summary}
+
+
 
 【原始数据上下文】
 以下是未经处理的检索数据（JSON格式），请仔细阅读并提取有价值的信息：
@@ -251,11 +260,12 @@ def adjust_node(state: AgentState):
     
     old_content = state.get("final_report", "")
     feedback = state.get("user_feedback", "")
-    
+    summary = state.get("summary", "")
     # 构建包含用户反馈的 Prompt
     adjust_prompt = f"""
     这是你之前生成的内容：
     {old_content}
+    历史对话：{summary}
     
     用户提出了以下修改要求：
     {feedback}
@@ -281,12 +291,12 @@ def summarize_node(state: AgentState):
     messages = state["messages"]
     
     # 策略：保留最后 2 条消息（最近的一问一答），把更早的消息全总结掉
-    # 注意：根据你的实际情况，你也可以选择保留最后 4 条或 6 条
+   
     messages_to_summarize = messages[:-2]
     
     # 1. 构建总结用的 Prompt
     if summary:
-        # 如果已经有摘要了，就让 LLM 把新产生的老消息“合并”进旧摘要里
+       
         summary_prompt = (
             f"这是之前的对话摘要: {summary}\n\n"
             "请结合以下新产生的对话记录，更新并扩写这个摘要，保留所有关键的用户指令、偏好和已完成的规划内容：\n\n"
@@ -300,7 +310,7 @@ def summarize_node(state: AgentState):
         )
         
     # 2. 调用模型生成新摘要
-    response = model.invoke([HumanMessage(content=summary_prompt)])
+    response = llm.invoke([HumanMessage(content=summary_prompt)])
     
     # 3. 核心机制：生成“删除指令”
     # 在 LangGraph 中，返回带有 RemoveMessage(id) 的列表，底层会自动帮你从 State 中删掉它们

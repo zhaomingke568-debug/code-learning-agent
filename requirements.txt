@@ -12,3 +12,7 @@ anthropic
 langchain-community
 pypdf
 youtube-transcript-api
+langchain-huggingface
+sentence-transformers
+faiss-cpu
+chromadb
