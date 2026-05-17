@@ -9,15 +9,21 @@ from src.state import AgentState
 
 def build_graph(checkpointer=None):
     """
-    构建 Phase 2 的 StateGraph（含 RAG + Review）。
+    构建 Phase 4 的完整 StateGraph（端到端闭环）。
 
-    流程：
+    完整流程：
     START → assess_capability → learning_path_planning
           → knowledge_explanation → review(explanation)
+            └─ verdict=needs_revision → 重新生成 explanation
           → exercise_generation → review(exercise)
+            └─ verdict=needs_revision → 重新生成 exercise
           → code_execution → review(code)
+            └─ verdict=needs_revision → 重新提交代码（user_code 清空等待输入）
           → report_generation → get_feedback
-          → (继续? advance_milestone → explanation : END)
+            ├─ continue → advance_milestone → explanation（下一个 milestone）
+            ├─ relearn → assess_capability（重新评估）
+            ├─ adjust_path → learning_path_planning（调整路径）
+            └─ end → END
 
     Args:
         checkpointer: LangGraph checkpointer for session persistence (e.g., PostgresSaver)
@@ -63,7 +69,7 @@ def build_graph(checkpointer=None):
     # === Review verdict routing: needs_revision → back to corresponding node ===
     workflow.add_conditional_edges(
         "review",
-        _review_router,
+        _review_router_str,
         {
             "continue_explanation": "knowledge_explanation",  # 讲解不通过，重新生成
             "continue_exercise": "exercise_generation",        # 练习不通过，重新生成
@@ -91,11 +97,12 @@ def build_graph(checkpointer=None):
     return workflow.compile(checkpointer=checkpointer)
 
 
-def _review_router(state: AgentState) -> str:
+def _review_router(state: AgentState) -> dict:
     """
-    Review 路由：根据 review_type 和 verdict 决定后续节点。
-    - verdict=needs_revision → 返回对应节点重新生成
+    Review 路由：根据 review_type 和 verdict 决定后续节点和状态更新。
+    - verdict=needs_revision → 返回对应节点重新生成，同时清空相关状态
     - verdict=approved → 根据 review_type 决定后续
+    返回 dict: {"next_node": str, "state_updates": dict}
     """
     review_type = state.get("review_type", "explanation")
     review_result = state.get("review_result", {})
@@ -104,21 +111,39 @@ def _review_router(state: AgentState) -> str:
     # 审核不通过，返回对应节点重新生成
     if verdict == "needs_revision":
         if review_type == "explanation":
-            return "continue_explanation"
+            return {
+                "next_node": "continue_explanation",
+                "state_updates": {}  # 讲解直接重新生成即可
+            }
         elif review_type == "exercise":
-            return "continue_exercise"
+            return {
+                "next_node": "continue_exercise",
+                "state_updates": {}  # 练习题直接重新生成
+            }
         elif review_type == "code":
-            return "continue_code"
+            return {
+                "next_node": "continue_code",
+                "state_updates": {
+                    "user_code": None,  # 清空用户代码，让用户重新输入
+                    "code_execution_result": None
+                }
+            }
 
     # 审核通过，根据 review_type 决定后续
     if review_type == "explanation":
-        return "continue_exercise"  # 讲解通过，进入练习生成
+        return {"next_node": "continue_exercise", "state_updates": {}}
     elif review_type == "exercise":
-        return "continue_code"      # 练习通过，进入代码执行
+        return {"next_node": "continue_code", "state_updates": {}}
     elif review_type == "code":
-        return "continue_feedback"  # 代码通过，进入反馈
+        return {"next_node": "continue_feedback", "state_updates": {}}
     else:
-        return "continue_report"
+        return {"next_node": "continue_report", "state_updates": {}}
+
+
+def _review_router_str(state: AgentState) -> str:
+    """兼容旧接口：返回路由目标节点名称"""
+    result = _review_router(state)
+    return result["next_node"]
 
 
 def _feedback_router(state: AgentState) -> str:
