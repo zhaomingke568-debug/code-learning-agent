@@ -32,9 +32,39 @@ def main():
     session_id = str(uuid.uuid4())
     thread_id = input("🔄 会话 ID（直接回车使用新会话，或输入已有 ID 恢复）: ").strip() or session_id
 
-    print(f"\n--- 🚀 开始学习：{topic} (目标: {depth}) ---\n")
+    print(f"\n--- 🚀 开始学习：{topic} (目标: {depth}) ---")
+    print(f"   Thread ID: {thread_id}")
 
-    # Initialize State - 匹配新的 AgentState schema
+    # === Load user profile from PostgreSQL ===
+    user_profile = None
+    try:
+        from src.memory.profile_store import ProfileStore
+        profile_store = ProfileStore()
+        user_profile = profile_store.get_profile(thread_id)
+        if user_profile:
+            print(f"\n👤 已加载历史画像: 级别={user_profile.get('capability_level', '入门')}")
+            weak = user_profile.get('weak_points', [])
+            strong = user_profile.get('strong_points', [])
+            if weak:
+                print(f"   薄弱点: {', '.join(weak) if isinstance(weak, list) else weak}")
+            if strong:
+                print(f"   强项: {', '.join(strong) if isinstance(strong, list) else strong}")
+        else:
+            print(f"\n👤 新用户画像，将在学习过程中更新")
+    except Exception as e:
+        print(f"⚠️ 无法加载用户画像: {e}")
+        user_profile = None
+
+    # === Setup checkpoint for session recovery ===
+    checkpointer = None
+    try:
+        from src.checkpoint import create_postgres_saver
+        checkpointer = create_postgres_saver()
+        print(f"\n💾 Checkpointer 已配置 (PostgresSaver)")
+    except Exception as e:
+        print(f"⚠️ 无法配置 checkpoint: {e}")
+
+    # Initialize State
     initial_state = {
         # 会话身份
         "session_id": session_id,
@@ -44,8 +74,8 @@ def main():
         "topic": topic,
         "depth_level": depth,
 
-        # 用户画像（初始为空，后续由 assessment_node 填充）
-        "user_profile": None,
+        # 用户画像（从数据库加载）
+        "user_profile": user_profile,
 
         # 学习路径
         "current_learning_path": None,
@@ -87,7 +117,7 @@ def main():
     }
 
     # Build and Run Graph
-    app = build_graph()
+    app = build_graph(checkpointer=checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
 
     try:
@@ -99,16 +129,22 @@ def main():
 
         # 输出执行结果摘要
         code_result = final_state.get("code_execution_result", {})
-        print(f"\n📊 最终执行结果：{'✅ 通过' if code_result.get('all_passed', False) else '❌ 未通过'}")
+        print(f"\n📊 最终执行结果：{'✅ 通过' if code_result.get('passed', False) else '❌ 未通过'}")
         print(f"   摘要：{code_result.get('summary', 'N/A')}")
 
-        # 保存 HTML 报告（如果有）
-        html_report = final_state.get("html_report") or final_state.get("final_report")
-        if html_report:
-            filename = f"learning_report_{topic.replace(' ', '_')}.html"
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(html_report)
-            print(f"\n📄 报告已保存到：{filename}")
+        # 更新用户画像（基于代码执行结果）
+        try:
+            from src.memory.profile_store import ProfileStore
+            profile_store = ProfileStore()
+            passed = code_result.get("passed", False)
+            score = code_result.get("score", 0.0)
+            profile_store.update_from_code_result(thread_id, topic, passed, score)
+            print(f"\n👤 用户画像已更新")
+        except Exception as e:
+            print(f"⚠️ 更新画像失败: {e}")
+
+        # 保存报告（console格式，无需文件）
+        print("\n📊 报告已在上方展示")
 
     except Exception as e:
         print(f"\n❌ 执行出错: {e}")

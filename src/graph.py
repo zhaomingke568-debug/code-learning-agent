@@ -7,7 +7,7 @@ from langgraph.graph import StateGraph, START, END
 from src.state import AgentState
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     """
     构建 Phase 2 的 StateGraph（含 RAG + Review）。
 
@@ -18,6 +18,9 @@ def build_graph():
           → code_execution → review(code)
           → report_generation → get_feedback
           → (继续? advance_milestone → explanation : END)
+
+    Args:
+        checkpointer: LangGraph checkpointer for session persistence (e.g., PostgresSaver)
     """
     workflow = StateGraph(AgentState)
 
@@ -57,7 +60,7 @@ def build_graph():
     # === code_execution → review(code) ===
     workflow.add_edge("code_execution", "review")
 
-    # === review → 根据 verdict 决定后续节点 ===
+    # === Review verdict routing: needs_revision → back to corresponding node ===
     workflow.add_conditional_edges(
         "review",
         _review_router,
@@ -65,36 +68,40 @@ def build_graph():
             "continue_explanation": "knowledge_explanation",  # 讲解不通过，重新生成
             "continue_exercise": "exercise_generation",        # 练习不通过，重新生成
             "continue_code": "code_execution",               # 代码不通过，重新提交
-            "continue_report": "report_generation",          # 审核通过，生成报告
-            "continue_feedback": "get_feedback"              # 代码审核通过，进入反馈
+            "continue_feedback": "get_feedback",             # 代码审核通过，进入反馈
+            "continue_report": "report_generation"           # 审核通过，生成报告
         }
     )
 
     workflow.add_edge("report_generation", "get_feedback")
 
-    # === 反馈循环 ===
+    # === Feedback router: END / 重学 / 调整路径 / 继续 ===
     workflow.add_conditional_edges(
         "get_feedback",
         _feedback_router,
         {
             "continue": "advance_milestone",
+            "relearn": "assess_capability",       # 重学：从评估开始
+            "adjust_path": "learning_path_planning",  # 调整路径
             "end": END
         }
     )
     workflow.add_edge("advance_milestone", "knowledge_explanation")
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer)
 
 
 def _review_router(state: AgentState) -> str:
     """
     Review 路由：根据 review_type 和 verdict 决定后续节点。
+    - verdict=needs_revision → 返回对应节点重新生成
+    - verdict=approved → 根据 review_type 决定后续
     """
     review_type = state.get("review_type", "explanation")
     review_result = state.get("review_result", {})
     verdict = review_result.get("verdict", "approved")
 
-    # 如果审核不通过，返回到对应节点重新生成
+    # 审核不通过，返回对应节点重新生成
     if verdict == "needs_revision":
         if review_type == "explanation":
             return "continue_explanation"
@@ -109,35 +116,46 @@ def _review_router(state: AgentState) -> str:
     elif review_type == "exercise":
         return "continue_code"      # 练习通过，进入代码执行
     elif review_type == "code":
-        return "continue_feedback" # 代码通过，进入反馈（或报告）
+        return "continue_feedback"  # 代码通过，进入反馈
     else:
-        return "continue_feedback"
+        return "continue_report"
 
 
 def _feedback_router(state: AgentState) -> str:
     """
     反馈路由：
-    - 用户满意或完成所有 milestone → END
-    - 用户想继续 → advance_milestone
+    - END: 用户满意或完成所有 milestone
+    - 重学 (relearn): 用户想重新学习 → assess_capability
+    - 调整路径 (adjust_path): 用户想调整学习路径 → learning_path_planning
+    - 继续 (continue): 进入下一个 milestone
     """
     user_feedback = state.get("user_feedback", "").strip().lower()
     learning_path = state.get("current_learning_path", {})
     milestone_index = state.get("current_milestone_index", 0)
     milestones = learning_path.get("milestones", [])
 
-    # 检查是否还有下一个 milestone
     has_next = (milestone_index + 1) < len(milestones)
 
-    if not user_feedback or user_feedback in ["ok", "满意", "继续", "next", "y", "yes"]:
+    # 用户主动结束
+    if user_feedback in ["退出", "quit", "exit", "q", "结束", "stop"]:
+        return "end"
+
+    # 用户想重新学习
+    if user_feedback in ["重学", "relearn", "重新学习", "重新评估"]:
+        return "relearn"
+
+    # 用户想调整路径
+    if user_feedback in ["调整", "调整路径", "修改路径", "change", "adjust"]:
+        return "adjust_path"
+
+    # 用户满意或继续
+    if not user_feedback or user_feedback in ["ok", "满意", "继续", "next", "y", "yes", "好", "好的"]:
         if has_next:
             return "continue"
         else:
             return "end"
 
-    if user_feedback in ["退出", "quit", "exit", "q"]:
-        return "end"
-
-    # 默认继续
+    # 默认：如有下一个 milestone 则继续，否则结束
     if has_next:
         return "continue"
     return "end"

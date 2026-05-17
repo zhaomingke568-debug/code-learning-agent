@@ -7,7 +7,8 @@
       "Bash(E:/learning-agent/.venv/Scripts/python.exe *)",
       "Bash(python -c ' *)",
       "Bash(.venv/Scripts/python -c ' *)",
-      "Bash(where python *)"
+      "Bash(where python *)",
+      "Bash(git push *)"
     ]
   }
 }

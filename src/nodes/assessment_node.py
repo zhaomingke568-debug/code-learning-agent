@@ -129,7 +129,7 @@ def _generate_questions(topic: str, depth_level: str) -> List[Dict]:
             "depth_level": depth_level
         })
 
-        print(f"Debug: structured invoke succeeded, result type={type(result)}")
+        #print(f"Debug: structured invoke succeeded, result type={type(result)}")
 
         if not result.questions:
             raise ValueError("questions 为空")

@@ -22,3 +22,14 @@ Thumbs.db
 .vscode/
 .idea/
 .trae/
+
+# Vector DB data (Chroma)
+chroma_official_docs/
+
+# Huggingface model cache
+models/
+src/models/
+
+# Local claude settings
+.claude/settings.local.json
+.claude/scheduled_tasks.json

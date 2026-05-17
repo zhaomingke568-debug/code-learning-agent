@@ -1,3 +1,4 @@
+
 import os
 from typing import List, Dict
 
@@ -7,7 +8,7 @@ load_dotenv(dotenv_path='.env')
 from src.state import AgentState
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
-from src.tools.rag.enhanced_rag import get_official_docs_rag
+from src.tools.rag.enhanced_rag import get_official_docs_rag, init_official_docs_rAG
 
 
 llm = ChatAnthropic(
@@ -44,8 +45,12 @@ def explanation_node(state: AgentState) -> dict:
     # 获取 RAG 上下文（PDF + 官方文档检索）
     pdf_context = state.get("pdf_context", [])
 
-    # 从官方文档 RAG 检索相关片段
+    # 从官方文档 RAG 检索相关片段（首次检索时初始化官方文档）
     official_docs_rag = get_official_docs_rag()
+    # 初始化时从官网抓取文档（传入当前 topic）
+    if not official_docs_rag.vectorstore or official_docs_rag.vectorstore._collection.count() == 0:
+        print(f"📚 初始化官方文档 RAG (topic: {current_topic})...")
+        init_official_docs_rAG(current_topic)
     official_docs = official_docs_rag.retrieve(current_topic, k=3)
 
     # 构建 RAG 上下文字符串
