@@ -105,3 +105,7 @@ class AgentState(TypedDict):
     assessment_questions: List[dict]  # [{"question": str, "options": [...], "correct_answer": str}]
     assessment_answers: List[dict]  # 用户回答 [{"question_id": str, "answer": str}]
     assessment_result: Optional[dict]  # {"level": str, "strengths": [...], "weaknesses": [...]}
+
+    # === Web API 模式 ===
+    waiting_for_input: Optional[str] = None  # "assessment" | "code" | "feedback" | None
+    input_prompt: Optional[str] = None  # 显示给用户的提示文本
